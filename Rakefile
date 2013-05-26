@@ -60,8 +60,6 @@ task :read_jekyll_configuration do
   # As of this writing, jekyll's default option is --future
   publish_future_dated_posts_option = jekyll_configuration.has_key?("publish_future_dated_posts") ? jekyll_configuration["publish_future_dated_posts"] : true
   publish_future_dated_posts_switch = publish_future_dated_posts_option ? "--future" : "--no-future"
-
-  puts "SET FUTURE POSTS OPTION: #{publish_future_dated_posts_option}"
 end
 
 desc "Generate jekyll site"
@@ -69,9 +67,6 @@ task :generate do
   raise "### You haven't set anything up yet. First run `rake install` to set up an Octopress theme." unless File.directory?(source_dir)
   puts "## Generating Site with Jekyll"
   system "compass compile --css-dir #{source_dir}/stylesheets"
-
-  puts "XXXXXX: #{publish_future_dated_posts_switch}"
-
   system "jekyll #{publish_future_dated_posts_switch}"
 end
 task :generate => :read_jekyll_configuration
