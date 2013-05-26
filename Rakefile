@@ -22,6 +22,8 @@ blog_index_dir  = 'source'    # directory for your blog's index page (if you put
 deploy_dir      = "_deploy"   # deploy directory (for Github pages deployment)
 stash_dir       = "_stash"    # directory to stash posts for speedy generation
 posts_dir       = "_posts"    # directory for blog files
+queue_dir       = "_queue"    # directory for queued blog posts
+queue_file      = "_queue.yaml" # file for queued blog posts
 themes_dir      = ".themes"   # directory for blog files
 new_post_ext    = "markdown"  # default new post file extension when using the new_post task
 new_page_ext    = "markdown"  # default new page file extension when using the new_page task
@@ -41,6 +43,7 @@ task :install, :theme do |t, args|
   mkdir_p "sass"
   cp_r "#{themes_dir}/#{theme}/sass/.", "sass"
   mkdir_p "#{source_dir}/#{posts_dir}"
+  mkdir_p "#{source_dir}/#{queue_dir}"
   mkdir_p public_dir
 end
 
@@ -48,20 +51,37 @@ end
 # Working with Jekyll #
 #######################
 
+publish_future_dated_posts_switch = "" # backwards-compatible default value
+
+desc "Read Jekyll configuration"
+task :read_jekyll_configuration do
+  jekyll_configuration = YAML.load_file("./_config.yml")
+
+  # As of this writing, jekyll's default option is --future
+  publish_future_dated_posts_option = jekyll_configuration.has_key?("publish_future_dated_posts") ? jekyll_configuration["publish_future_dated_posts"] : true
+  publish_future_dated_posts_switch = publish_future_dated_posts_option ? "--future" : "--no-future"
+
+  puts "SET FUTURE POSTS OPTION: #{publish_future_dated_posts_option}"
+end
+
 desc "Generate jekyll site"
 task :generate do
   raise "### You haven't set anything up yet. First run `rake install` to set up an Octopress theme." unless File.directory?(source_dir)
   puts "## Generating Site with Jekyll"
   system "compass compile --css-dir #{source_dir}/stylesheets"
-  system "jekyll"
+
+  puts "XXXXXX: #{publish_future_dated_posts_switch}"
+
+  system "jekyll #{publish_future_dated_posts_switch}"
 end
+task :generate => :read_jekyll_configuration
 
 desc "Watch the site and regenerate when it changes"
 task :watch do
   raise "### You haven't set anything up yet. First run `rake install` to set up an Octopress theme." unless File.directory?(source_dir)
   puts "Starting to watch source with Jekyll and Compass."
   system "compass compile --css-dir #{source_dir}/stylesheets" unless File.exist?("#{source_dir}/stylesheets/screen.css")
-  jekyllPid = Process.spawn({"OCTOPRESS_ENV"=>"preview"}, "jekyll --auto")
+  jekyllPid = Process.spawn({"OCTOPRESS_ENV"=>"preview"}, "jekyll --auto #{publish_future_dated_posts_switch}")
   compassPid = Process.spawn("compass watch")
 
   trap("INT") {
@@ -71,13 +91,14 @@ task :watch do
 
   [jekyllPid, compassPid].each { |pid| Process.wait(pid) }
 end
+task :watch => :read_jekyll_configuration
 
 desc "preview the site in a web browser"
 task :preview do
   raise "### You haven't set anything up yet. First run `rake install` to set up an Octopress theme." unless File.directory?(source_dir)
   puts "Starting to watch source with Jekyll and Compass. Starting Rack on port #{server_port}"
   system "compass compile --css-dir #{source_dir}/stylesheets" unless File.exist?("#{source_dir}/stylesheets/screen.css")
-  jekyllPid = Process.spawn({"OCTOPRESS_ENV"=>"preview"}, "jekyll --auto")
+  jekyllPid = Process.spawn({"OCTOPRESS_ENV"=>"preview"}, "jekyll --auto #{publish_future_dated_posts_switch}")
   compassPid = Process.spawn("compass watch")
   rackupPid = Process.spawn("rackup --port #{server_port}")
 
@@ -88,18 +109,25 @@ task :preview do
 
   [jekyllPid, compassPid, rackupPid].each { |pid| Process.wait(pid) }
 end
+task :preview => :read_jekyll_configuration
 
 # usage rake new_post[my-new-post] or rake new_post['my new post'] or rake new_post (defaults to "new-post")
 desc "Begin a new post in #{source_dir}/#{posts_dir}"
-task :new_post, :title do |t, args|
+task :new_post, :title, :date do |t, args|
   if args.title
     title = args.title
   else
     title = get_stdin("Enter a title for your post: ")
   end
+  if args.date
+    post_date = Date.parse(args.date)
+  else
+    post_date = Date.today
+  end
+  
   raise "### You haven't set anything up yet. First run `rake install` to set up an Octopress theme." unless File.directory?(source_dir)
-  mkdir_p "#{source_dir}/#{posts_dir}"
-  filename = "#{source_dir}/#{posts_dir}/#{Time.now.strftime('%Y-%m-%d')}-#{title.to_url}.#{new_post_ext}"
+  mkdir_p "#{source_dir}/#{posts_dir}" unless File.directory?("#{source_dir}/#{posts_dir}")
+  filename = "#{source_dir}/#{posts_dir}/#{post_date.strftime('%Y-%m-%d')}-#{title.to_url}.#{new_post_ext}"
   if File.exist?(filename)
     abort("rake aborted!") if ask("#{filename} already exists. Do you want to overwrite?", ['y', 'n']) == 'n'
   end
@@ -108,10 +136,116 @@ task :new_post, :title do |t, args|
     post.puts "---"
     post.puts "layout: post"
     post.puts "title: \"#{title.gsub(/&/,'&amp;')}\""
-    post.puts "date: #{Time.now.strftime('%Y-%m-%d %H:%M')}"
+    post.puts "date: #{post_date.strftime('%Y-%m-%d')}"
     post.puts "comments: true"
     post.puts "categories: "
     post.puts "---"
+  end
+end
+
+# usage rake new_qpost[my-new-post] or rake new_qpost['my new post']
+desc "Begin a new post on the end of the queue in #{source_dir}/#{queue_dir}"
+task :new_qpost, :title do |t, args|
+  if args.title
+    title = args.title
+  else
+    title = get_stdin('Enter a title for your post: ')
+  end
+  queue_file_path = "#{source_dir}/#{queue_dir}/#{queue_file}"
+  new_post_filename = "#{title.to_url}.#{new_post_ext}"
+  new_post_path = "#{source_dir}/#{queue_dir}/#{new_post_filename}"
+
+  raise "### You haven't set anything up yet. First run `rake install` to set up an Octopress theme." unless File.directory?(source_dir)
+  mkdir_p "#{source_dir}/#{queue_dir}" unless File.directory?("#{source_dir}/#{posts_dir}")
+
+  raise 'A post with this name already exists!' if File.exists?(new_post_path)
+
+  open(new_post_path, 'w') do |post|
+    post.puts '---'
+    post.puts 'layout: post'
+    post.puts "title: \"#{title.gsub(/&/,'&amp;')}\""
+    post.puts 'comments: true'
+    post.puts 'categories: '
+    post.puts '---'
+  end
+
+  begin
+    current_queue = YAML.load_file(queue_file_path)
+  rescue Errno::ENOENT
+    current_queue = Array.new
+  end
+
+  current_queue.push("#{new_post_filename}")
+
+  File.open(queue_file_path, 'w+') do |queue|
+    queue.puts(current_queue.to_yaml)
+  end
+end
+
+# usage rake new_qhpost[my-new-post] or rake new_qhpost['my new post']
+desc "Begin a new post on the head of the queue in #{source_dir}/#{queue_dir}"
+task :new_qhpost, :title do |t, args|
+  if args.title
+    title = args.title
+  else
+    title = get_stdin('Enter a title for your post: ')
+  end
+  queue_file_path = "#{source_dir}/#{queue_dir}/#{queue_file}"
+  new_post_filename = "#{title.to_url}.#{new_post_ext}"
+  new_post_path = "#{source_dir}/#{queue_dir}/#{new_post_filename}"
+
+  raise "### You haven't set anything up yet. First run `rake install` to set up an Octopress theme." unless File.directory?(source_dir)
+  mkdir_p "#{source_dir}/#{queue_dir}" unless File.directory?("#{source_dir}/#{posts_dir}")
+
+  raise 'A post with this name already exists!' if File.exists?(new_post_path)
+
+  open(new_post_path, 'w') do |post|
+    post.puts '---'
+    post.puts 'layout: post'
+    post.puts "title: \"#{title.gsub(/&/,'&amp;')}\""
+    post.puts 'comments: true'
+    post.puts 'categories: '
+    post.puts '---'
+  end
+
+  begin
+    current_queue = YAML.load_file(queue_file_path)
+  rescue Errno::ENOENT
+    current_queue = Array.new
+  end
+
+  current_queue.unshift("#{new_post_filename}")
+
+  File.open(queue_file_path, 'w+') do |queue|
+    queue.puts(current_queue.to_yaml)
+  end
+end
+
+#usage rake publish_next
+desc "Publish next post from queue if there is one"
+task :publish_next do |t|
+  raise "### You haven't set anything up yet. First run `rake install` to set up an Octopress theme." unless File.directory?(source_dir)
+  queue_file_path = "#{source_dir}/#{queue_dir}/#{queue_file}"
+  raise "### Queue #{queue_filepath} does not exist" unless File.exists?(queue_file_path)
+
+  begin
+    current_queue = YAML.load_file(queue_file_path)
+  rescue Errn::ENOENT
+    fail()
+  end
+
+  if  current_queue.length == 0
+    puts "No posts to publish in queue"
+  else
+    next_post = current_queue.shift
+
+    new_post_name = "#{source_dir}/#{posts_dir}/#{Time.now.strftime('%Y-%m-%d')}-#{next_post}"
+    
+    File.rename("#{source_dir}/#{queue_dir}/#{next_post}", new_post_name)
+
+    File.open(queue_file_path, 'w+') do |queue|
+      queue.puts(current_queue.to_yaml)
+    end
   end
 end
 
